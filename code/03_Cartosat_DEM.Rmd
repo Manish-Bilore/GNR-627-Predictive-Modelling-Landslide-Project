@@ -1,0 +1,452 @@
+---
+title: "Terrain analysis for Landslide Predictive Model - Cartosat data (Mosaic)"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+# install.packages('RSAGA')
+# library(RSAGA)
+# rsaga.env(path = "C:/Program Files/saga-9.6.1_x64")
+```
+
+
+```{r}
+# Define a vector of required packages
+packages <- c(
+"raster", "sf", "caret", "randomForest", "here", "raster", "terra", "RColorBrewer", "dplyr", "whitebox"
+)
+```
+
+
+```{r}
+# Extract not installed packages
+not_installed <- packages[!(packages %in% installed.packages()[ , "Package"])]    
+
+# Install not installed packages
+if(length(not_installed)) install.packages(not_installed)                               
+```
+
+```{r}
+# Load packages
+suppressPackageStartupMessages(lapply(packages, library, character.only = TRUE))
+```
+
+$$
+\textbf{Load the DEM raster}
+$$ 
+```{r}
+# Load the DEM as a raster
+# dem_raster <- rast("D:/GNR 627 Predictive Modelling/DEM_Elevation/cartosat/mosaic.tif")
+
+dem_raster <- rast(here("data/cartosat/mosaic.tif"))
+
+# Print metadata for the DEM
+print(dem_raster)
+
+# Get basic information about the raster
+summary(dem_raster)
+```
+
+```{r}
+# Check the resolution (spatial resolution in x and y directions)
+resolution <- res(dem_raster)
+print(resolution)
+
+# Get dimensions and extent
+dims <- dim(dem_raster)  # Rows, columns, layers
+ext <- ext(dem_raster)  # xmin, xmax, ymin, ymax
+
+# Calculate resolution manually
+x_res <- (ext[2] - ext[1]) / dims[2]
+y_res <- (ext[4] - ext[3]) / dims[1]
+
+cat("Calculated resolution (x, y):", x_res, y_res, "\n")
+
+# Approximate resolution in meters
+lat_resolution <- resolution[2] * 111320
+lon_resolution <- resolution[1] * 111320 * cos(mean(ext(dem_raster)[3:4]) * pi / 180)
+
+cat("Approximate resolution in meters:\n")
+cat("Latitude resolution:", lat_resolution, "m\n")
+cat("Longitude resolution:", lon_resolution, "m\n")
+```
+
+```{r}
+# Check the data from the 01_LULC_RF.Rmd file 
+wynd_shp
+
+# Set the CRS for the shape file the same as the elevation Data
+wynd_shp <- st_transform(wynd_shp, crs = st_crs(dem_raster))
+
+```
+
+```{r}
+# Extract extent (xmin, xmax, ymin, ymax)
+shapefile_extent <- ext(wynd_shp)
+
+# Extract individual components
+xmin <- shapefile_extent[1]
+xmax <- shapefile_extent[2]
+ymin <- shapefile_extent[3]
+ymax <- shapefile_extent[4]
+
+```
+
+$$
+\textbf{Elevation}
+$$ 
+```{r}
+# Clip the Raster to the Shapefile
+clipped_raster <- mask(dem_raster, wynd_shp)
+
+summary(clipped_raster)
+
+# Masking
+clipped_raster <- mask(dem_raster, wynd_shp)
+
+# Save the clipped raster as a TIFF file
+dir_path <- here("output/process")
+output_file <- file.path(dir_path, "clipped_raster.tif")
+
+terra::writeRaster(clipped_raster, filename = output_file, overwrite = TRUE)
+
+# Confirmation message
+cat("Clipped raster saved to:", dir_path)
+```
+
+
+```{r}
+# Extract extent (xmin, xmax, ymin, ymax)
+shapefile_extent <- ext(wynd_shp)
+
+# Extract individual components
+xmin <- shapefile_extent[1]
+xmax <- shapefile_extent[2]
+ymin <- shapefile_extent[3]
+ymax <- shapefile_extent[4]
+
+
+# Generate an elevation plot (assuming elevation is in the first layer)
+plot(clipped_raster, 
+     main = "Elevation Plot", 
+     col = terrain.colors(100),
+     xlab = "Longitude", 
+     ylab = "Latitude",
+     legend.args = list(text = "Elevation (m)", side = 4, font = 2, line = 2.5), 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Generate contour lines
+contours <- as.contour(clipped_raster, levels = seq(minmax(clipped_raster)[1], minmax(clipped_raster)[2], by = 25))
+
+# Plot the raster as a background
+plot(clipped_raster, 
+     main = "Elevation Plot", 
+     col = terrain.colors(100),
+     xlab = "Longitude", 
+     ylab = "Latitude",
+     legend.args = list(text = "Elevation (m)", side = 4, font = 2, line = 2.5), 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Overlay contour lines
+lines(contours, col = "black", lwd = 0.5)
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(clipped_raster)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Elevation.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(clipped_raster, 
+     main = "Elevation (m)",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+
+```
+
+
+$$
+\textbf{Slope and Aspect}
+$$ 
+```{r}
+# Calculate Slope # S4 method for signature 'SpatRaster'
+
+slope <- terrain(clipped_raster, v="slope", neighbors=8, unit="degrees") # Slope in degrees
+slope
+summary(slope)
+slope[slope <= 0.0001] <- 0.0001  # Replace 0 and very small value slope with a small value
+plot(slope, main = "Slope", xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+slope <- mask(slope, is.na(slope))  # Mask the NA values
+slope[is.na(slope)] <- 0           # Replace NA values with 0
+
+summary(slope)
+slope
+```
+
+
+```{r}
+# Save as a TIFF file
+dir_path <- here("output/process")
+output_file_slope <- file.path(dir_path, "cartosat_slope.tif")
+
+terra::writeRaster(slope, filename = output_file_slope, overwrite = TRUE)
+```
+
+```{r}
+# After saving the TIFF file
+# Replace very small values with a small slope value (e.g., 0.0001)
+slope[slope <= 0.0001] <- 0.0001  
+
+# Mask NA values
+slope <- mask(slope, is.na(slope))  # Mask the NA values
+slope[slope <= 0] <- NA             # Replace zero and very small values with NA
+```
+
+
+```{r}
+# Get the extent of the raster
+e <- ext(slope)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Define a color palette (example: terrain.colors, viridis, etc.)
+# colors <- terrain.colors(100)  # You can use any color palette here
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Slope.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(slope, 
+     main = "Slope (degree)",           # Title
+     axes = TRUE,                       # Show axes
+     legend = TRUE,                     # Show legend
+     cex.main = 1.5,                    # Title size
+     cex.axis = 1,                      # Axis label size
+     cex.lab = 1.2,                     # Axis text size
+     tck = 0.02,                        # Length of axis ticks
+     mgp = c(3, 1, 0),                  # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),              # Set xmin and xmax from the extent
+     ylim = c(ymin, ymax),              # Set ymin and ymax from the extent
+     #col = colors,                      # Color palette
+     #colNA = "transparent"
+     )             # Set NA color to transparent
+
+# Close the PNG device
+dev.off()
+```
+
+
+```{r}
+# Calculate Aspect # S4 method for signature 'SpatRaster'
+aspect <- terrain(clipped_raster, v="aspect", neighbors=8, unit="degrees") # Aspect in degrees
+plot(aspect, main = "aspect", xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+
+# Save as a TIFF file
+dir_path <- here("output/process")
+output_file_aspect <- file.path(dir_path, "cartosat_aspect.tif")
+
+terra::writeRaster(aspect, filename = output_file_aspect, overwrite = TRUE)
+```
+
+
+```{r}
+roughness <- terrain(clipped_raster, v="roughness", neighbors=8) # Roughness
+plot(roughness, main = "roughness", xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Save as a TIFF file
+dir_path <- here("output/process")
+output_file_roughness <- file.path(dir_path, "cartosat_roughness.tif")
+
+terra::writeRaster(roughness, filename = output_file_roughness, overwrite = TRUE)
+```
+
+
+```{r}
+tpi <- terrain(clipped_raster, v="TPI", neighbors=8) # Topographic Position Index (TPI) 
+plot(tpi, main = "Topographic Position Index", xlim = c(xmin, xmax), ylim = c(ymin, ymax), col = brewer.pal(11, "RdYlBu")) # custom colour setting
+
+# Save as a TIFF file
+dir_path <- here("output/process")
+output_file_tpi <- file.path(dir_path, "cartosat_Topographic_Position_Index.tif")
+
+terra::writeRaster(tpi, filename = output_file_tpi, overwrite = TRUE)
+
+```
+
+$$
+\textbf{Profile line}
+$$ 
+
+```{r}
+# Generate and Plot a Profile
+
+# Create a line along which to generate the profile. # Manually specifying the coordinates of the line.
+line_coords <- matrix(c(xmax, ymin, xmin, ymax), ncol = 2, byrow = TRUE)  # (lon, lat) pairs
+profile_line <- vect(line_coords, type = "lines", crs = crs(clipped_raster))
+
+# Clip the profile line
+
+wynd_vect <- terra::vect(wynd_shp)
+clipped_profile <- terra::intersect(profile_line, wynd_vect)
+print(clipped_profile)
+
+# Plot the DEM and overlay the line
+plot(clipped_raster, col = terrain.colors(100), main = "DEM with Profile Line", xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+lines(clipped_profile, col = "red", lwd = 2)
+```
+
+```{r}
+
+```
+
+
+```{r}
+#  Extract Elevation Values Along the Line
+profile_points <- terra::extract(clipped_raster, clipped_profile, along = TRUE, xy = TRUE)
+
+# Add Distance Along the Profile
+
+# Extract coordinates
+coords <- profile_points[, c("x", "y")]
+
+# Calculate distances between consecutive points
+distances <- sqrt(diff(coords[, 1])^2 + diff(coords[, 2])^2)
+
+# Calculate cumulative distance
+cumulative_distance <- c(0, cumsum(distances))
+
+# Add distance to the data frame
+profile_points$distance <- cumulative_distance
+
+
+# Check the output
+head(profile_points)
+
+
+# Extract distance and elevation
+distance <- profile_points$distance
+elevation <- profile_points$mosaic
+
+# Set the file path and name for the PNG file
+png(here("plots/Issue_out/Elevation_Profile.png"), width = 5000, height = 2500, res = 300)
+# Plot the profile
+plot(distance, elevation, type = "l", col = "blue", lwd = 2,
+     main = "Elevation Profile",
+     xlab = "Distance (meters)", ylab = "Elevation (meters)")
+# Close the PNG device
+dev.off()
+```
+
+
+$$
+\textbf{Flow Acc}
+$$ 
+
+
+```{r}
+# Fill depressions using WhiteboxTools
+wbt_fill_depressions(
+    dem = here("output/process/clipped_raster.tif"),
+    output = here("output/process/filled_dem_raster.tif")
+)
+
+```
+
+```{r}
+wbt_d8_flow_accumulation(
+    input = here("output/process/filled_dem_raster.tif"),
+    output = here("output/process/flow_acc_file.tif")
+)
+
+```
+
+
+```{r}
+# Load the flow accumulation raster
+flow_acc <- terra::rast(here("output/process/flow_acc_file.tif"))
+plot(flow_acc, main = "D8 Flow Accumulation", xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+```
+
+```{r}
+flow_acc_smooth <- focal(flow_acc, w = matrix(1, 3, 3), fun = mean)  # 3x3 smoothing window
+flow_acc_smooth
+plot(flow_acc_smooth, main = "D8 Flow Accumulation", xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+```
+
+```{r}
+# Save as a TIFF file
+dir_path <- here("output/process")
+output_file_flow_acc_smooth <- file.path(dir_path, "cartosat_Flow_Accumulation.tif")
+
+terra::writeRaster(flow_acc_smooth, filename = output_file_flow_acc_smooth, overwrite = TRUE)
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(flow_acc_smooth)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Flow_Acc.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(flow_acc_smooth, 
+     main = "Flow Accumulation",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+

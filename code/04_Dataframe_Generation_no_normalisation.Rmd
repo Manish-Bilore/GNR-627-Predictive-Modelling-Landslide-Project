@@ -1,0 +1,882 @@
+---
+title: "Load all the processed GIS data an convert them into one classified CSV"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(terra)
+library(here)
+library(sf)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+```
+
+
+$$
+\textbf{Convert GIS layers into numeric values}
+$$
+$$
+\textbf{Load the base raster}
+$$
+```{r}
+# Load the DEM as a raster
+dem_raster <- rast(here("data/cartosat/mosaic.tif"))
+
+# Print metadata for the DEM
+print(dem_raster)
+
+# Get basic information about the raster
+summary(dem_raster)
+```
+
+```{r}
+# Check the resolution (spatial resolution in x and y directions)
+resolution <- res(dem_raster)
+print(resolution)
+
+# Get dimensions and extent
+dims <- dim(dem_raster)  # Rows, columns, layers
+ext <- ext(dem_raster)  # xmin, xmax, ymin, ymax
+
+# Calculate resolution manually
+x_res <- (ext[2] - ext[1]) / dims[2]
+y_res <- (ext[4] - ext[3]) / dims[1]
+
+cat("Calculated resolution (x, y):", x_res, y_res, "\n")
+
+# Approximate resolution in meters
+lat_resolution <- resolution[2] * 111320
+lon_resolution <- resolution[1] * 111320 * cos(mean(ext(dem_raster)[3:4]) * pi / 180)
+
+cat("Approximate resolution in meters:\n")
+cat("Latitude resolution:", lat_resolution, "m\n")
+cat("Longitude resolution:", lon_resolution, "m\n")
+```
+
+$$
+\textbf{Load the shape file}
+$$
+
+```{r}
+# Check the data from the 01_LULC_RF.Rmd file 
+# Load the India district shape file
+wynd_shp <- st_read(here("data/Survey_of_India","Vaithiry Wayanad Sub Dist Boundary.shp"))
+
+# Set the CRS for the shape file the same as the elevation Data
+wynd_shp <- st_transform(wynd_shp, crs = st_crs(dem_raster))
+
+```
+
+```{r}
+# Extract extent (xmin, xmax, ymin, ymax)
+shapefile_extent <- ext(wynd_shp)
+
+# Extract individual components
+xmin <- shapefile_extent[1]
+xmax <- shapefile_extent[2]
+ymin <- shapefile_extent[3]
+ymax <- shapefile_extent[4]
+
+```
+
+$$
+\textbf{Elevation}
+$$
+```{r}
+filepath <- here("output/process/clipped_raster.tif")
+
+clipped_raster <- terra::rast(filepath)
+
+clipped_raster
+
+# Plot the classified raster
+plot(clipped_raster, main = "Elevation (m)", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Dataframe 
+df_elevation <- as.data.frame(clipped_raster, xy = TRUE, na.rm = TRUE)
+
+colnames(df_elevation) <- c("x", "y", "Elevation_Class")
+summary(df_elevation)
+
+# 
+# # Define the number of bins
+# num_bins <- 40  # Replace with desired number of bins
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(clipped_raster, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_raster <- classify(clipped_raster, reclass_matrix)
+
+# # Plot the classified raster
+# plot(classified_raster, main = paste(num_bins, "Bin-Classified Elevation"), 
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# # Dataframe 
+# df_elevation <- as.data.frame(classified_raster, xy = TRUE, na.rm = TRUE)
+# 
+# colnames(df_elevation) <- c("x", "y", "Elevation_Class")
+# summary(df_elevation)
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(clipped_raster)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Elevation_.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(clipped_raster, 
+     main = "Elevation (m)",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+$$
+\textbf{Slope}
+$$
+
+```{r}
+filepath <- here("output/process/cartosat_slope.tif")
+
+slope <- terra::rast(filepath)
+
+slope
+
+plot(slope, main = "Slope", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Crop the Images to the wayanad vaithiry sub district
+slope_cropped <- crop(slope, wynd_shp) # crop to a rectangle 
+
+# Mask the values in s2 based on the shape of the wayanad vaithiry sub district shape file 
+slope_cropped_masked <- mask(slope_cropped, wynd_shp)
+
+plot(slope_cropped_masked, main = "slope_cropped_masked", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Dataframe 
+df_slope <- as.data.frame(slope_cropped_masked, xy = TRUE, na.rm = TRUE)
+
+colnames(df_slope) <- c("x", "y", "Slope_Class")
+
+summary(df_slope)
+
+# # Define the number of bins
+# num_bins <- 20  # Replace with desired number of bins
+
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(slope_cropped_masked, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_slope <- classify(slope_cropped_masked, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_slope, main = paste(num_bins, "Bin-Classified Slope"), 
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe 
+# df_slope <- as.data.frame(classified_slope, xy = TRUE)
+# 
+# colnames(df_slope) <- c("x", "y", "Slope_Class")
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(slope_cropped_masked)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Slope_.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(slope_cropped_masked, 
+     main = "Slope (degree)",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+
+$$
+\textbf{Aspect}
+$$
+
+```{r}
+filepath <- here("output/process/cartosat_aspect.tif")
+
+aspect <- terra::rast(filepath)
+
+aspect
+
+plot(slope, main = "Aspect", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Crop the Images to the wayanad vaithiry sub district
+aspect_cropped <- crop(aspect, wynd_shp) # crop to a rectangle 
+
+# Mask the values in s2 based on the shape of the wayanad vaithiry sub district shape file 
+aspect_cropped_masked <- mask(aspect_cropped, wynd_shp)
+
+plot(aspect_cropped_masked, main = "aspect_cropped_masked", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Dataframe 
+df_aspect <- as.data.frame(aspect_cropped_masked, xy = TRUE, na.rm = TRUE)
+
+colnames(df_aspect) <- c("x", "y", "Aspect_Class")
+
+summary(df_aspect)
+
+# # Define the number of bins
+# num_bins <- 36  # Replace with desired number of bins
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(aspect_cropped_masked, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_aspect <- classify(aspect_cropped_masked, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_aspect, main = paste(num_bins, "Bin-Classified Aspect"), 
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe 
+# df_aspect <- as.data.frame(classified_aspect, xy = TRUE)
+# 
+# colnames(df_aspect) <- c("x", "y", "Aspect_Class")
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(aspect_cropped_masked)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Aspect_.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(aspect_cropped_masked, 
+     main = "Aspect (degree)",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+
+$$
+\textbf{Topographic Wetness Index (TWI)}
+$$
+```{r}
+filepath <- here("data/QGIS/03_DEM_analysis/twi.tif")
+
+twi <- terra::rast(filepath)
+
+twi
+# Fix (Nudge) the twi values that are falling out of the range
+twi[twi <= -3] <- -3  # Replace 
+
+
+plot(twi, main = "Topographic Wetness Index", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Dataframe 
+df_twi<- as.data.frame(twi, xy = TRUE, na.rm = TRUE)
+
+colnames(df_twi) <- c("x", "y", "TWI_Class")
+
+summary(df_twi)
+
+# # Define the number of bins
+# num_bins <- 45  # Replace with desired number of bins
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(twi, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_twi <- classify(twi, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_twi, main = paste(num_bins, "Bin-Classified Topographic Wetness Index"), 
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe 
+# df_twi<- as.data.frame(classified_twi, xy = TRUE)
+# 
+# colnames(df_twi) <- c("x", "y", "TWI_Class")
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(twi)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_TWI_.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(twi, 
+     main = "Topographic Wetness Index",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+
+$$
+\textbf{planar curvature}
+$$
+```{r}
+filepath <- here("data/QGIS/03_DEM_analysis/curvature_plan.tif")
+
+curve_plan <- terra::rast(filepath)
+
+curve_plan
+
+# Get values excluding NA
+values <- na.omit(values(curve_plan))
+
+# Calculate cumulative count
+sorted_values <- sort(values)
+cum_freq <- cumsum(table(sorted_values)) / length(values)
+
+# Define thresholds (e.g., 1st and 99th percentiles)
+lower_thresh <- quantile(sorted_values, 0.02)
+upper_thresh <- quantile(sorted_values, 0.98)
+
+# Apply CCC (mask values outside thresholds)
+curve_plan[values(curve_plan) < lower_thresh | values(curve_plan) > upper_thresh] <- NA
+
+
+curve_plan
+
+plot(curve_plan, main = "planar curvature", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Dataframe 
+df_curve_plan <- as.data.frame(curve_plan, xy = TRUE, na.rm = TRUE)
+
+colnames(df_curve_plan) <- c("x", "y", "Plan_Curve_Class")
+
+summary(df_curve_plan)
+
+# # Define the number of bins
+# num_bins <- 45  # Replace with desired number of bins
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(curve_plan, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_curve_plan <- classify(curve_plan, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_curve_plan, main = paste(num_bins, "Bin-Classified Planar Curvature"), 
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe 
+# df_curve_plan <- as.data.frame(classified_curve_plan, xy = TRUE)
+# 
+# colnames(df_curve_plan) <- c("x", "y", "Plan_Curve_Class")
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(curve_plan)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Curvature_.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(curve_plan, 
+     main = "Curvature",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+
+$$
+\textbf{curvature_general}
+$$
+```{r}
+filepath <- here("data/QGIS/03_DEM_analysis/curvature_general.tif")
+
+curve_gen <- terra::rast(filepath)
+
+curve_gen
+
+# Get values excluding NA
+values <- na.omit(values(curve_gen))
+
+# Calculate cumulative count
+sorted_values <- sort(values)
+cum_freq <- cumsum(table(sorted_values)) / length(values)
+
+# Define thresholds (e.g., 1st and 99th percentiles)
+lower_thresh <- quantile(sorted_values, 0.02)
+upper_thresh <- quantile(sorted_values, 0.98)
+
+# Apply CCC (mask values outside thresholds)
+# curve_gen[values(curve_gen) < lower_thresh | values(curve_gen) > upper_thresh] <- NA
+
+
+curve_gen
+
+plot(curve_plan, main = "general curvature", 
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Dataframe 
+df_curve_gen <- as.data.frame(curve_gen, xy = TRUE, na.rm = TRUE)
+
+colnames(df_curve_gen) <- c("x", "y", "Gen_Curve_Class")
+
+summary(df_curve_gen)
+
+# # Define the number of bins
+# num_bins <- 45  # Replace with desired number of bins
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(curve_gen, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_curve_gen <- classify(curve_gen, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_curve_gen, main = paste(num_bins, "Bin-Classified General Curvature"), 
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe 
+# df_curve_gen <- as.data.frame(classified_curve_gen, xy = TRUE)
+# 
+# colnames(df_curve_gen) <- c("x", "y", "Gen_Curve_Class")
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(curve_gen)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/cartosat_Curvature_Gen_.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(curve_gen, 
+     main = "Curvature General",           # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0),             # Margins for axis labels and ticks
+     xlim = c(xmin, xmax),         # Set xmin and xmax
+     ylim = c(ymin, ymax))         # Set ymin and ymax
+
+# Overlay contour lines
+# lines(contours, col = "black", lwd = 0.5)
+
+# Close the PNG device
+dev.off()
+```
+
+
+$$
+\textbf{NDVI}
+$$
+
+```{r}
+filepath <- here("output/process/s2_NDVI.tif")
+
+ndvi <- terra::rast(filepath)
+
+ndvi
+
+# Set the CRS the same as the elevation Data
+ndvi <- terra::project(ndvi, terra::crs(dem_raster))
+
+plot(ndvi, main = "NDVI",
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Aggregate NDVI to match elevation data resolution (factor = 3 for 30x30 from 10x10)
+ndvi_aggregated <- terra::aggregate(ndvi, fact = 3, fun = mean, na.rm = TRUE)
+
+# Resample NDVI to match the grid of the elevation raster
+ndvi <- terra::resample(ndvi_aggregated, dem_raster, method = "bilinear")
+
+# Dataframe
+df_ndvi <- as.data.frame(ndvi, xy = TRUE, na.rm = TRUE)
+
+colnames(df_ndvi) <- c("x", "y", "NDVI_Class")
+
+summary(df_ndvi)
+
+# # Define the number of bins
+# num_bins <- 36  # Replace with desired number of bins
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(ndvi, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_ndvi <- classify(ndvi, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_ndvi, main = paste(num_bins, "Bin-Classified NDVI"),
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe
+# df_ndvi <- as.data.frame(classified_ndvi, xy = TRUE, na.rm = TRUE)
+# 
+# colnames(df_ndvi) <- c("x", "y", "NDVI_Class")
+# 
+# summary(df_ndvi)
+```
+
+$$
+\textbf{LULC}
+$$
+
+```{r}
+filepath <- here("output/process/lulc_rf_clipped.tif")
+
+lulc <- terra::rast(filepath)
+
+lulc
+
+# Set the CRS the same as the elevation Data
+lulc <- terra::project(lulc, terra::crs(dem_raster))
+
+plot(lulc, main = "LULC",
+     xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+# Aggregate NDVI to match elevation data resolution (factor = 3 for 30x30 from 10x10)
+lulc_aggregated <- terra::aggregate(lulc, fact = 3, fun = mean, na.rm = TRUE)
+
+# Resample NDVI to match the grid of the elevation raster
+lulc <- terra::resample(lulc_aggregated, dem_raster, method = "bilinear")
+
+# Dataframe
+df_lulc <- as.data.frame(lulc, xy = TRUE)
+
+colnames(df_lulc) <- c("x", "y", "LULC_Class")
+
+# Ensure LULC_Class is rounded and constrained to 1-6
+df_lulc <- df_lulc |> 
+  mutate(LULC_Class = pmin(pmax(round(LULC_Class), 1), 6))
+
+head(df_lulc)
+summary(df_lulc)
+
+# # Define the number of bins
+# num_bins <- 6  # Same as the RF lulc
+# 
+# # Calculate quantile breaks for the chosen number of bins
+# quantiles <- quantile(values(lulc, na.rm = TRUE), probs = seq(0, 1, by = 1 / num_bins))
+# 
+# # Create the reclassification matrix
+# reclass_matrix <- matrix(NA, ncol = 3, nrow = length(quantiles) - 1)
+# for (i in 1:(length(quantiles) - 1)) {
+#   reclass_matrix[i, ] <- c(quantiles[i], quantiles[i + 1], i)
+# }
+# 
+# # Apply reclassification
+# classified_lulc <- classify(lulc, reclass_matrix)
+# 
+# # Plot the classified raster
+# plot(classified_lulc, main = paste(num_bins, "Bin-Classified LULC"),
+#      xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+# 
+# # Dataframe
+# df_lulc <- as.data.frame(classified_lulc, xy = TRUE, na.rm = TRUE)
+# 
+# colnames(df_lulc) <- c("x", "y", "LULC_Class")
+# 
+# summary(df_lulc)
+```
+
+$$
+\textbf{Dataframe Generation}
+$$
+other GIS layers, drainage, roads, Stream Power Index, Geology, LULC Change,need to be added
+
+```{r}
+summary(df_elevation)
+head(df_elevation)
+
+summary(df_slope)
+head(df_slope)
+
+summary(df_aspect)
+head(df_aspect)
+
+summary(df_curve_gen)
+head(df_curve_gen)
+
+summary(df_curve_plan)
+head(df_curve_plan)
+
+summary(df_lulc)
+head(df_lulc)
+
+summary(df_ndvi)
+head(df_ndvi)
+
+summary(df_twi)
+head(df_twi)
+```
+
+```{r}
+# # List of dataframes to merge
+# dfs <- list(df_elevation, df_slope, df_aspect, df_curve_gen, df_curve_plan, df_lulc, df_ndvi, df_twi)
+# 
+# # Check the unique pairs of x and y in each dataframe
+# unique_coordinates <- lapply(dfs, function(df) unique(df[, c("x", "y")]))
+# 
+# # Check if there is any difference in coordinates across data frames
+# lapply(unique_coordinates, head)  # View the first few unique coordinates for each dataframe
+# ```
+# 
+# ```{r}
+# # Get all unique `x, y` coordinates across dataframes
+# all_coords <- unique(do.call(rbind, lapply(dfs, function(df) df[, c("x", "y")])))
+# all_coords <- data.frame(all_coords) # Ensure it's a dataframe
+# 
+# # Merge each dataframe with the complete set of coordinates
+# dfs <- lapply(dfs, function(df) merge(all_coords, df, by = c("x", "y"), all.x = TRUE))
+# 
+# ```
+# 
+# 
+# ```{r}
+# # Merging all dataframes by common columns `x` and `y`
+# # combined_df <- reduce(dfs, function(x, y) merge(x, y, by = c("x", "y"), all = TRUE))
+# combined_df <- reduce(dfs, function(x, y) merge(x, y, by = c("x", "y"), all.x = TRUE, all.y = TRUE))
+# 
+# 
+# summary(combined_df)
+# 
+# # Convert combined dataframe to spatial data (sf object)
+# combined_sf <- st_as_sf(combined_df, coords = c("x", "y"), crs = 4326)  # CRS 4326 for WGS84
+# 
+# 
+# summary(combined_df)
+# 
+# 
+# summary(df_combined)
+
+```
+
+
+```{r}
+################################################################################
+################## Combine Multiple Raster Layers into a CSV ###################
+################################################################################
+
+# Merge all dataframes based on coordinates
+df_combined_catosat <- merge(df_elevation, df_slope, by = c("x", "y"))
+df_combined_catosat <- merge(df_combined_catosat, df_aspect, by = c("x", "y"))
+df_combined_catosat <- merge(df_combined_catosat, df_curve_gen, by = c("x", "y"))
+df_combined_catosat <- merge(df_combined_catosat, df_curve_plan, by = c("x", "y"))
+df_combined_catosat <- merge(df_combined_catosat, df_twi, by = c("x", "y"))
+summary(df_combined_catosat)
+```
+
+
+```{r}
+df_combined_s2 <- merge(df_ndvi, df_lulc, by = c("x", "y"))
+summary(df_combined_s2)
+```
+
+```{r}
+# Round coordinates to ensure matching precision
+# df_ndvi$x <- round(df_ndvi$x, 5)
+# df_ndvi$y <- round(df_ndvi$y, 5)
+# df_elevation$x <- round(df_elevation$x, 5)
+# df_elevation$y <- round(df_elevation$y, 5)
+```
+
+
+```{r}
+summary(df_ndvi)
+head(df_ndvi)
+
+summary(df_elevation)
+head(df_elevation)
+
+df_combine_test <- merge(df_ndvi, df_elevation, by = c("x", "y"))
+summary(df_combine_test)
+```
+
+```{r}
+df_combined <- merge(df_combined_catosat, df_combined_s2, by = c("x", "y"))
+summary(df_combined)
+```
+
+
+```{r}
+# 
+# # Rename columns for clarity
+# colnames(combined_df) <- c("Longitude", "Latitude", "Elevation_Class", 
+#                            "Slope_Class", "Aspect_Class", "Curvature_General",
+#                            "Curvature_Plan", "LULC", "NDVI", "TWI"
+#                            )
+```
+
+
+```{r}
+# Save the combined data as a CSV file
+write.csv(df_combined, here("output/data_straight.csv"), row.names = FALSE)
+```
+
+

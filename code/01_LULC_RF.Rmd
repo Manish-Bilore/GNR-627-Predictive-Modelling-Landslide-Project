@@ -1,0 +1,438 @@
+---
+title: "LULC Mapping for Landslide Predictive Model - Sentinel 2 data (Mosaic) Version 02"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# Define a vector of required packages
+packages <- c(
+"raster", "sf", "caret", "randomForest", "here", "raster", "terra", "RStoolbox", "RColorBrewer", "ggspatial"
+)
+```
+
+
+```{r}
+# Extract not installed packages
+not_installed <- packages[!(packages %in% installed.packages()[ , "Package"])]    
+
+# Install not installed packages
+if(length(not_installed)) install.packages(not_installed)                               
+```
+
+```{r}
+# Load packages
+suppressPackageStartupMessages(lapply(packages, library, character.only = TRUE))
+```
+
+```{r}
+# Parameters for the PNG being saved
+
+# Get today's date
+today_date <- Sys.Date()
+
+# Set custom DPI (e.g., 300)
+dpi <- 300
+width <- 16.5  # in inches
+height <- 11.7  # in inches
+```
+
+
+$$
+\textbf{Load Sentinel 2 data for Wayanad}
+$$ 
+```{r}
+process_sentinel_image <- function(image_path) {
+  # Import the four bands (2-8) as a Raster Stack
+  filenames <- list.files(here(image_path),
+                          full.names = TRUE,
+                          pattern = "B0[2-8]_10m\\.jp2$")
+  
+  s2_image <- rast(filenames)
+  
+  # Rename the bands
+  names(s2_image) <- c("blue", "green", "red", "nir")
+  
+  # Visualize
+  plotRGB(s2_image, 
+          r = "red", 
+          g = "green", 
+          b = "blue", # True Color Composite
+          stretch = "lin"
+          )
+  
+  return(s2_image)
+}
+
+```
+
+```{r}
+# Process multiple images using the function
+dataset_paths <- list(
+  "data/sentinel2_lvl2_10m/L2A_T43PEN_A045104_20240210T052850/IMG_DATA/R10m",
+  "data/sentinel2_lvl2_10m/L2A_T43PEP_A045104_20240210T052850/IMG_DATA/R10m",
+  "data/sentinel2_lvl2_10m/L2A_T43PFN_A045104_20240210T052850/IMG_DATA/R10m",
+  "data/sentinel2_lvl2_10m/L2A_T43PFP_A036267_20240215T053307/IMG_DATA/R10m",
+  "data/sentinel2_lvl2_10m/L2A_T43PFP_A045104_20240210T052850/IMG_DATA/R10m"
+)
+```
+
+```{r}
+s2_images <- lapply(dataset_paths, process_sentinel_image)
+```
+
+
+$$
+\textbf{Load Spatial data for Wayanad and check/clean Data}
+$$ 
+
+```{r}
+# Load the India district shape file
+wynd_shp <- st_read(here("data/Survey_of_India","Vaithiry Wayanad Sub Dist Boundary.shp"))
+
+```
+
+
+```{r}
+# Function to Crop and mask images with shapefile
+crop_and_mask_image <- function(image, wynd_shp) {
+
+  # Transform CRS to match image
+  wynd_shp <- st_transform(wynd_shp, crs = st_crs(image))
+  
+  # Crop and mask the image
+  image <- crop(image, wynd_shp)
+  image <- mask(image, wynd_shp)
+  
+  # Visualize result
+  plotRGB(image, r = "red", g = "green", b = "blue", stretch = "lin")
+  
+  return(image)
+}
+
+```
+
+```{r}
+# Crop and mask images with shapefile
+s2_images_cropped <- lapply(s2_images, crop_and_mask_image, wynd_shp)
+```
+
+
+$$
+\textbf{merge the loaded images into a mosaic}
+$$ 
+```{r}
+# ??mosaic
+```
+
+```{r}
+# Create mosaic of the cropped images
+s2_mosaic <- do.call(mosaic, c(s2_images_cropped, fun = mean))
+```
+
+```{r}
+# visualize the result 
+plotRGB(s2_mosaic, r = "red", g = "green", b = "blue", # True Color Composite
+        stretch = "lin"
+        )
+```
+
+```{r}
+s2_mosaic
+```
+
+
+$$
+\textbf{Load Training Data}
+$$ 
+
+```{r}
+# Import shapefile containing training data
+shp_train <- vect(here("data/TrainingSet/SCP Training Layer.shp"))
+shp_train
+```
+
+```{r}
+# Conversion of class-characters
+levels(as.factor(shp_train$macroclass))
+
+for (i in 1:length(unique(shp_train$macroclass))) {
+  cat(paste0(i, " ", levels(as.factor(shp_train$macroclass))[i]), sep = "\n")
+}
+
+# bands of S2 image
+names(s2_mosaic)
+
+# Create dataframe
+s2_smp <- extract(s2_mosaic, shp_train, df = TRUE)
+
+# Matching ID of smp and class of shp to new column "cl", delete "ID" column
+s2_smp$cl <- as.factor(shp_train$macroclass[match(s2_smp$ID, seq(nrow(shp_train)))])
+s2_smp <- s2_smp[-1]
+
+```
+
+```{r}
+# Save dataframe to your working directory
+save(s2_smp, file = here("output/process/s2_smp.rda"))
+
+# Load dataframe from your working directory
+load(file = here("output/process/s2_smp.rda"))
+
+# Check out the summary of the class-column in smp
+summary(s2_smp$cl)
+str(s2_smp)
+```
+
+$$
+\textbf{Spectral Profile Visualization}
+$$ 
+```{r}
+# Aggregate cl-column 
+spec_profile <- aggregate(. ~ cl, data = s2_smp, FUN = mean, na.rm = TRUE)
+
+# Plot empty plot of a defined size
+plot(0,
+     ylim = c(min(spec_profile[2:ncol(spec_profile)]), max(spec_profile[2:ncol(spec_profile)])), 
+     xlim = c(1, ncol(s2_smp)-1), 
+     type = 'n', 
+     xlab = "S2 bands", 
+     ylab = "Reflectance [% * 100]",
+     xaxt = 'n'  # Suppress the default x-axis
+)
+
+# Add custom x-axis ticks at 1, 2, 3, 4 for the Sentinel 2 Bands
+axis(1, at = c(1, 2, 3, 4), labels = c("Band Blue", "Band Green", "Band Red", "Band NIR"))
+
+# Define colors for class representation - one color per class necessary!
+mycolors <- c("#1818dc", "#f84342", "#094905", "orange", "#7ccd8a", "#dec313") # as per the LULC norm in India
+
+# Class names corresponding to color scheme
+class_names <- c("Water", "Built-up", "Vegetation", "Soil", "Crop", "Barren land")
+
+# Draw one line for each class
+for (i in 1:nrow(spec_profile)) {
+  lines(as.numeric(spec_profile[i, -1]), 
+        lwd = 4, 
+        col = mycolors[i]
+  )
+}
+
+# Add a grid
+grid()
+
+# Add a legend
+legend(as.character(spec_profile$cl),
+       x = "topleft",
+       legend = class_names,
+       col = mycolors,
+       lwd = 5,
+       bty = "n"
+)
+```
+
+$$
+\textbf{Classification: Random Forest (RF) }
+$$ 
+
+```{r}
+# Access training samples
+summary(s2_smp$cl)
+
+# Down-Sampling via minority class and identify the number of available training samples per class
+s2_smp.size <- rep(min(summary(s2_smp$cl)), nlevels(s2_smp$cl))
+s2_smp.size
+
+rfmodel_s2 <- tuneRF(x = s2_smp[-ncol(s2_smp)],
+                  y = s2_smp$cl,
+                  sampsize = s2_smp.size,
+                  strata = s2_smp$cl,
+                  ntree = 250,
+                  importance = TRUE,
+                  doBest = TRUE,                  # Whether to run a forest using the optimal mtry found
+                  plot = TRUE                      # Whether to plot the OOB error as function of mtry
+)
+
+# Print useful information about our model
+rfmodel_s2
+```
+
+```{r}
+# OOB error (Out-Of-Bag error)
+oob_error <- rfmodel_s2$err.rate[nrow(rfmodel_s2$err.rate), 1]
+
+# Number of trees
+num_trees <- rfmodel_s2$ntree
+
+# Convert predictions to numeric (if they are factors)
+predictions <- as.numeric(as.character(predictions))
+
+# Calculate RSME
+rsme <- sqrt(mean((predictions - actual_values)^2))
+
+# Print the results
+cat("OOB Error: ", oob_error, "\n")
+cat("Number of Trees: ", num_trees, "\n")
+cat("RSME: ", rsme, "\n")
+```
+
+
+```{r}
+# Access/Plot important variables
+varImpPlot(rfmodel_s2)
+
+# Plot rfmodel
+plot(rfmodel_s2, col = c("#000000", "#fbf793", "#006601", "#bfe578", "#d00000", "#6569ff"), lwd = 3) 
+
+# Save model-file
+# save(rfmodel_s2, file = "rfmodel_s2.RData")
+save(rfmodel_s2, file = here("output/process/rfmodel_s2.RData"))
+
+# Load model-file
+load(here("output/process/rfmodel_s2.RData"))
+```
+
+
+```{r}
+# Replace NA values with 0 or another appropriate value
+s2_mosaic <- ifel(is.na(s2_mosaic), 0, s2_mosaic)
+```
+
+```{r}
+# Align extents explicitly
+s2_mosaic <- crop(s2_mosaic, ext(s2_mosaic))  # Crop to its own extent to ensure consistency
+```
+
+```{r}
+# Check for remaining NA values
+anyNA(values(s2_mosaic))
+```
+
+
+```{r}
+# Predict all pixels/run classification
+result <- predict(s2_mosaic,
+                  rfmodel_s2,
+                  filename = here("output/process/RF_classification_s2.tif"),
+                  overwrite = TRUE
+)
+```
+
+```{r}
+result
+```
+
+```{r}
+wynd_shp <-  st_geometry(wynd_shp)
+wynd_shp <- st_transform(wynd_shp, crs(result))
+wynd_shp
+```
+
+```{r}
+# Convert sf geometry to SpatVector
+wynd_vect <- vect(wynd_shp) 
+```
+
+```{r}
+wynd_vect
+```
+
+```{r}
+#################################################################################
+# Crop the RF Image to the wayanad vaithiry sub district
+cropped_raster <- crop(result, wynd_vect) # crop to a rectangle
+
+# Mask the values in RF Image based on the shape of the wayanad vaithiry sub district shape file 
+masked_raster <- mask(cropped_raster, wynd_vect)
+```
+
+```{r}
+masked_raster
+```
+
+
+```{r}
+# Reproject the raster to WGS 84 (EPSG:4326) for degrees (lat/lon)
+result_wgs84 <- project(masked_raster, "EPSG:4326")
+```
+
+```{r}
+result_wgs84
+```
+
+```{r}
+plot(result_wgs84)
+```
+
+```{r}
+# Convert raster to a data frame for ggplot
+result_df <- as.data.frame(result_wgs84, xy = TRUE)
+```
+
+
+```{r}
+# Inspect the structure of the data
+head(result_df)
+```
+
+
+```{r}
+# Convert the class column to a factor and assign class labels
+result_df$class <- factor(result_df$class, levels = 1:6, labels = class_names)
+```
+
+
+```{r}
+# Create the ggplot with class labels
+plot_rf <- 
+ggplot(result_df, aes(x = x, y = y, fill = class)) +
+  geom_raster() +
+  scale_fill_manual(values = mycolors, name = "Land Cover Class") +
+  coord_sf(crs = 4326) +  # Set the CRS to WGS84
+  theme_minimal() +
+  labs(title = "Random Forrest LULC Classification",
+       subtitle = "Land Use Land Cover",
+       caption = paste("RSME: ", round(rsme, 5), 
+                        ", OOB: ", round(oob_error, 5), 
+                        ", No. Trees: ", num_trees),
+       x = "Longitude", y = "Latitude") +
+  theme(legend.position = "bottom") + 
+
+  # Add the north arrow with inset positioning
+  annotation_north_arrow(
+    location = "br",  # Bottom-right
+    which_north = "true", 
+    style = north_arrow_minimal(),
+    pad_x = unit(-1, "lines"), # Move outside horizontally
+    pad_y = unit(2, "lines") # Adjust vertical padding
+  ) +
+  # Add the scale bar with inset positioning
+  annotation_scale(
+    location = "br",   # Bottom-right
+    width_hint = 0.4,  # Adjust relative size
+    pad_x = unit(0, "lines"), # Move outside horizontally
+    pad_y = unit(1, "lines"), # Adjust vertical padding
+    style = "ticks",   # Tick-style scale bar
+    unit_category = "metric" # Metric units
+  )
+```
+
+```{r}
+plot_rf
+```
+
+```{r}
+ggsave(
+  filename = "RF_LULC_.png", 
+  path = here("output/process"), 
+  plot = plot_rf, 
+  device = "png", 
+  units = "in", 
+  width = 16.5,  # Adjust the width as needed (in inches)
+  height = 11.7,  # Adjust the height as needed (in inches)
+  dpi = 500,   # Resolution
+  limitsize = FALSE  # Disable size limit check
+)
+```
+

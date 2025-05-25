@@ -1,0 +1,191 @@
+---
+title: "NDVI Mapping for Landslide Predictive Model - Sentinel 2 data (Mosaic)"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+
+```{r}
+# Data needed for NDVI processed in the previous R notebook
+s2_mosaic
+wynd_shp
+```
+
+```{r}
+plot(s2_mosaic)
+```
+
+
+```{r}
+# Crop the Images to the wayanad vaithiry sub district
+s2_data <- crop(s2_mosaic, wynd_shp) # crop to a rectangle 
+
+# Mask the values in s2 based on the shape of the wayanad vaithiry sub district shape file 
+s2_data <- mask(s2_data, wynd_shp)
+
+```
+
+```{r}
+# visualize the result 
+plotRGB(s2_data, r = "red", g = "green", b = "blue", # True Color Composite
+        stretch = "lin"
+        )
+
+s2_data
+```
+
+$$
+\textbf{NDVI Calculation}
+$$ 
+
+```{r}
+# NDVI Function -> NDVI = (NIR - Red) / (NIR + Red) 
+ndvi <- function(x, y) {
+  (x - y)/(x + y)
+}
+```
+
+```{r}
+s2_NDVI <- ndvi(s2_data[[4]], s2_data[[3]])
+```
+
+```{r}
+s2_NDVI
+```
+
+```{r}
+# Reproject the raster to WGS 84 (EPSG:4326) for degrees (lat/lon)
+ndvi_wgs84 <- project(s2_NDVI, "EPSG:4326")
+```
+
+```{r}
+# Convert raster to a data frame for ggplot
+ndvi_df <- as.data.frame(ndvi_wgs84, xy = TRUE)
+```
+
+```{r}
+head(ndvi_df)
+```
+
+
+```{r}
+ggplot(ndvi_df)
+```
+
+
+```{r}
+# Get the extent of the raster
+e <- ext(s2_NDVI)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/s2_ndvi.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(s2_NDVI, 
+     main = "Sentinel-2 NDVI",     # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0))             # Margins for axis labels and ticks
+
+# Close the PNG device
+dev.off()
+
+```
+
+```{r}
+# Save the NDVI
+
+# Save the clipped lulc as a TIFF file
+dir_path <- here("output/process")
+output_file_s2_NDVI <- file.path(dir_path, "s2_NDVI.tif")
+
+terra::writeRaster(s2_NDVI, filename = output_file_s2_NDVI, overwrite = TRUE)
+```
+
+
+```{r}
+# histogram for the Sentinel 2 NDVI
+hist(s2_NDVI, xlab = "NDVI", main = NULL)
+
+# in the range 0 to 0.2
+abline(v = 0.2, col = "red", lwd = 2)
+abline(v = 0, col = "red", lwd = 2)
+```
+
+```{r}
+# Create a matrix to be used as an argument in the classify function
+
+reclass_m <- matrix(c(    -Inf,    0.015, 1,  # water
+                         0.015,     0.14, 2,  # urban
+                          0.14,     0.25, 3,  # barren land
+                          0.25,     0.35, 4,  # shrubs and grassland
+                          0.35,     0.55, 5,  # sparse vegetation
+                          0.55,      Inf, 6), # dense vegetation
+                    ncol = 3, byrow = TRUE
+                    )
+```
+
+```{r}
+# Create a new raster s2_cover using the threshold values defined in reclass_m
+s2_cover <- classify(s2_NDVI, rcl = reclass_m)
+```
+
+```{r}
+plot(s2_cover)
+```
+
+```{r}
+# Save the NDVI LULC
+
+# Save the clipped lulc as a TIFF file
+dir_path <- here("output/process")
+output_file_s2_NDVI_lulc <- file.path(dir_path, "s2_NDVI_LULC.tif")
+
+terra::writeRaster(s2_cover, filename = output_file_s2_NDVI_lulc, overwrite = TRUE)
+```
+
+```{r}
+# Get the extent of the raster
+e <- ext(s2_cover)
+
+# Calculate the aspect ratio (width/height of the extent)
+aspect_ratio <- (e[2] - e[1]) / (e[4] - e[3])
+
+# Set a fixed height, and calculate width based on the aspect ratio
+height <- 2500  # Set the desired height
+width <- height * aspect_ratio
+
+# Open PNG device with the desired resolution
+png(here("plots/Issue_out/s2_ndvi_lulc.png"), width = width, height = height, res = 300)
+
+# Plot the SpatRaster with a specified resolution for visualization
+plot(s2_cover, 
+     main = "Sentinel-2 NDVI LULC",     # Title
+     axes = TRUE,                  # Show axes
+     legend = TRUE,                # Show legend
+     cex.main = 1.5,               # Title size (reasonable size)
+     cex.axis = 1,                 # Axis label size (slightly bigger)
+     cex.lab = 1.2,                # Axis text size (x and y labels)
+     cex.legend = 1,               # Legend text size
+     tck = 0.02,                   # Length of axis ticks
+     mgp = c(3, 1, 0))             # Margins for axis labels and ticks
+
+# Close the PNG device
+dev.off()
+```
+
