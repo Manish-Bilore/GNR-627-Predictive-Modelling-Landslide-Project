@@ -3,3 +3,6 @@ RF based LULC
 Fuzzy Inference Modelling 
 Predictive Mapping of Landslide prone area in a district
 further work to be done upon ANFIS and ML/DL approaches 
+
+
+add reference links as well
